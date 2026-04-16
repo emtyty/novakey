@@ -2,6 +2,7 @@
 // Main application delegate. Sets up the event tap, status bar, and handles lifecycle.
 
 import Cocoa
+import ServiceManagement
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -65,6 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               name: NSWorkspace.willSleepNotification, object: nil)
         workspace.addObserver(self, selector: #selector(handleWake),
                               name: NSWorkspace.didWakeNotification, object: nil)
+
+        // Enable launch at login
+        enableLaunchAtLogin()
 
         Log.info("NovaKey started successfully")
     }
@@ -147,6 +151,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func handleWake(_ notification: Notification) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.startEventTap()
+        }
+    }
+
+    // MARK: - Launch at Login
+
+    private func enableLaunchAtLogin() {
+        do {
+            try SMAppService.mainApp.register()
+            Log.info("Launch at login: enabled")
+        } catch {
+            Log.error("Launch at login failed: \(error.localizedDescription)")
         }
     }
 

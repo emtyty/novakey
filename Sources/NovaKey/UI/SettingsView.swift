@@ -1,11 +1,13 @@
 // SettingsView.swift
 // SwiftUI settings window for NovaKey preferences.
 
+import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
     @State private var fixBrowserAutocomplete: Bool = AppSettings.shared.fixBrowserAutocomplete
     @State private var sendKeyStepByStep: Bool = AppSettings.shared.sendKeyStepByStep
+    @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
 
     var body: some View {
         Form {
@@ -14,6 +16,21 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                 Text("Toggle Hotkey: \(HotkeyManager.currentDescription)")
                     .foregroundStyle(.secondary)
+            }
+
+            Section("General") {
+                Toggle("Launch at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, newValue in
+                        do {
+                            if newValue {
+                                try SMAppService.mainApp.register()
+                            } else {
+                                try SMAppService.mainApp.unregister()
+                            }
+                        } catch {
+                            launchAtLogin = !newValue // revert on failure
+                        }
+                    }
             }
 
             Section("Compatibility") {
