@@ -9,6 +9,7 @@ final class EventTapManager {
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var retainedSelf: Unmanaged<EventTapManager>?
     private var isRunning = false
 
     let sourceManager: EventSourceManager
@@ -54,8 +55,12 @@ final class EventTapManager {
             (1 << CGEventType.leftMouseDown.rawValue) |
             (1 << CGEventType.rightMouseDown.rawValue)
 
-        // Bridge `self` to the C callback via userInfo pointer
-        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+        // Bridge `self` to the C callback via userInfo pointer.
+        // Use passRetained to prevent use-after-free if manager is deallocated
+        // while the tap is active. Released in stop().
+        let retained = Unmanaged.passRetained(self)
+        self.retainedSelf = retained
+        let userInfo = retained.toOpaque()
 
         // Try cgSessionEventTap first
         var tap = CGEvent.tapCreate(
@@ -115,6 +120,11 @@ final class EventTapManager {
         runLoopSource = nil
         eventTap = nil
         isRunning = false
+
+        // Release the retained self reference
+        retainedSelf?.release()
+        retainedSelf = nil
+
         Log.info("Event tap stopped")
     }
 

@@ -5,7 +5,12 @@
 import Foundation
 
 enum Log {
-    private static let logFile = "/tmp/novakey.log"
+    private static var logDir: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Logs/NovaKey"
+    }
+    private static var logFile: String { "\(logDir)/novakey.log" }
+
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss.SSS"
@@ -13,8 +18,15 @@ enum Log {
     }()
 
     static func setup() {
-        // Clear old log on startup
-        try? "".write(toFile: logFile, atomically: true, encoding: .utf8)
+        // Create log directory with user-only permissions (0700)
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: logDir) {
+            try? fm.createDirectory(atPath: logDir, withIntermediateDirectories: true)
+            // Set directory to owner-only access
+            try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: logDir)
+        }
+        // Clear old log on startup, create with owner-only permissions (0600)
+        fm.createFile(atPath: logFile, contents: nil, attributes: [.posixPermissions: 0o600])
         info("=== NovaKey Log Started ===")
     }
 
@@ -26,21 +38,21 @@ enum Log {
         write("ERROR", message)
     }
 
+    /// Debug logs only in DEBUG builds. No-op in release.
     static func debug(_ message: String) {
+        #if DEBUG
         write("DEBUG", message)
+        #endif
     }
 
     private static func write(_ level: String, _ message: String) {
         let timestamp = dateFormatter.string(from: Date())
         let line = "[\(timestamp)] \(level): \(message)\n"
-        NSLog("NovaKey: %@", message)
         if let data = line.data(using: .utf8) {
             if let handle = FileHandle(forWritingAtPath: logFile) {
                 handle.seekToEndOfFile()
                 handle.write(data)
                 handle.closeFile()
-            } else {
-                FileManager.default.createFile(atPath: logFile, contents: data)
             }
         }
     }
