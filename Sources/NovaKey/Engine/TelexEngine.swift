@@ -1,0 +1,354 @@
+// TelexEngine.swift
+// Core Telex input processing engine.
+// Pure Swift, no UI or system dependencies -- fully testable.
+
+import Foundation
+
+// MARK: - Engine Result
+
+/// The result of processing a single keystroke through the engine.
+enum EngineResult: Equatable {
+    /// Let the original key event pass through unchanged.
+    case passThrough
+
+    /// Suppress the original key event and send replacement characters.
+    /// `backspaces`: how many backspace events to send first.
+    /// `text`: the replacement Unicode string to send after backspaces.
+    case replace(backspaces: Int, text: String)
+
+    /// The key is a word break -- reset the session and let it through.
+    case wordBreak
+}
+
+// MARK: - Telex Engine
+
+/// Processes keystrokes according to the Telex input method.
+/// Maintains a syllable buffer and produces engine results that tell the
+/// event tap what to do (pass through, replace, or reset).
+final class TelexEngine {
+
+    // MARK: - State
+
+    /// The current syllable being composed.
+    private(set) var buffer = SyllableBuffer()
+
+    /// Whether Vietnamese mode is active.
+    var isVietnameseMode: Bool = true
+
+    /// The last raw key that was typed (for double-press detection).
+    private var lastRawKey: Character? = nil
+
+    // MARK: - Main Entry Point
+
+    /// Process a single keystroke.
+    ///
+    /// - Parameters:
+    ///   - keyCode: The macOS virtual keycode.
+    ///   - isShift: Whether Shift is held.
+    ///   - hasCommandOrControl: Whether Cmd or Ctrl is held.
+    ///   - hasOption: Whether Option is held.
+    /// - Returns: An `EngineResult` telling the event tap what to do.
+    func processKey(
+        keyCode: UInt16,
+        isShift: Bool = false,
+        hasCommandOrControl: Bool = false,
+        hasOption: Bool = false
+    ) -> EngineResult {
+        guard let key = KeyCode(rawValue: keyCode) else {
+            return .passThrough
+        }
+
+        // Modifier combos (Cmd+C, Ctrl+A, etc.) always pass through and reset
+        if hasCommandOrControl {
+            resetSession()
+            return .passThrough
+        }
+
+        // Option key combos pass through and reset
+        if hasOption {
+            resetSession()
+            return .passThrough
+        }
+
+        // Word break keys reset the session
+        if key.isWordBreak {
+            resetSession()
+            return .wordBreak
+        }
+
+        // Backspace: remove last character from buffer
+        if key == .delete {
+            return handleBackspace()
+        }
+
+        // Vietnamese mode off: just track nothing
+        if !isVietnameseMode {
+            return .passThrough
+        }
+
+        // Get the ASCII character for this key
+        guard let ascii = key.asciiLetter else {
+            // Non-letter key that isn't a word break -- reset and pass through
+            resetSession()
+            return .passThrough
+        }
+
+        let char = isShift ? Character(ascii.uppercased()) : ascii
+
+        return processLetter(char, isUpperCase: isShift)
+    }
+
+    /// Reset the syllable buffer and start fresh.
+    func resetSession() {
+        buffer.reset()
+        lastRawKey = nil
+    }
+
+    // MARK: - Letter Processing
+
+    private func processLetter(_ char: Character, isUpperCase: Bool) -> EngineResult {
+        let lower = char.lowercased().first!
+
+        // Check if this is a Telex tone key (s, f, r, x, j, z)
+        if let tone = VietnameseData.telexToneKeys[lower], buffer.vowelCount > 0 {
+            let result = handleToneKey(lower, tone: tone, isUpperCase: isUpperCase)
+            if result != nil {
+                lastRawKey = lower
+                return result!
+            }
+        }
+
+        // Check if this is a d-stroke trigger (dd -> đ)
+        if lower == "d" {
+            let result = handleDKey(isUpperCase: isUpperCase)
+            lastRawKey = lower
+            return result
+        }
+
+        // Check if this is a vowel modifier trigger (aa, ee, oo, aw, ow, uw, w)
+        if lower == "w" || isDoubleKeyTrigger(lower) {
+            if let result = handleVowelModifier(lower, isUpperCase: isUpperCase) {
+                lastRawKey = lower
+                return result
+            }
+        }
+
+        // Regular letter -- add to buffer
+        let viChar = ViChar(base: lower, isUpperCase: isUpperCase)
+        buffer.append(viChar)
+
+        // After adding a consonant after vowels, re-check tone placement
+        if !VietnameseData.vowels.contains(lower) && buffer.vowelCount > 0 && buffer.currentTone != .none {
+            if let moved = recheckTonePlacement() {
+                lastRawKey = lower
+                return moved
+            }
+        }
+
+        lastRawKey = lower
+        return .passThrough
+    }
+
+    // MARK: - Tone Handling
+
+    /// Handle a tone key press (s, f, r, x, j, z).
+    /// Returns nil if the tone cannot be applied (treat as regular letter).
+    private func handleToneKey(_ key: Character, tone: ToneMark, isUpperCase: Bool) -> EngineResult? {
+        // z key: remove existing tone
+        if tone == .none {
+            return handleRemoveTone(key, isUpperCase: isUpperCase)
+        }
+
+        // If same tone is already applied, undo it (double-press reversal)
+        if buffer.currentTone == tone {
+            return undoTone(key, isUpperCase: isUpperCase)
+        }
+
+        // Find the correct position for the tone mark
+        guard let position = TonePlacement.findTonePosition(in: buffer) else {
+            return nil
+        }
+
+        // Capture old state for backspace calculation
+        let oldText = buffer.text
+
+        // Apply the tone
+        buffer.applyTone(tone, at: position)
+
+        let newText = buffer.text
+        return buildReplacement(oldText: oldText, newText: newText)
+    }
+
+    /// Handle z key: remove existing tone mark.
+    private func handleRemoveTone(_ key: Character, isUpperCase: Bool) -> EngineResult? {
+        guard buffer.currentTone != .none else {
+            // No tone to remove -- treat as regular letter
+            return nil
+        }
+
+        let oldText = buffer.text
+        buffer.applyTone(.none, at: 0) // index doesn't matter for .none
+        let newText = buffer.text
+        return buildReplacement(oldText: oldText, newText: newText)
+    }
+
+    /// Undo a tone mark when the same tone key is pressed again.
+    /// e.g., "as" -> "á", then "ass" -> "as"
+    private func undoTone(_ key: Character, isUpperCase: Bool) -> EngineResult {
+        let oldText = buffer.text
+
+        // Remove the tone
+        buffer.applyTone(.none, at: 0)
+
+        // Add the key as a literal character
+        let viChar = ViChar(base: key, isUpperCase: isUpperCase)
+        buffer.append(viChar)
+
+        let newText = buffer.text
+        return buildReplacement(oldText: oldText, newText: newText)
+    }
+
+    // MARK: - D-Stroke Handling
+
+    /// Handle the 'd' key. If the last character in the buffer is also 'd',
+    /// convert to đ. Otherwise, add as regular 'd'.
+    private func handleDKey(isUpperCase: Bool) -> EngineResult {
+        // Check if previous character is 'd' without stroke
+        if let lastIdx = buffer.lastIndex(ofBase: "d"), !buffer.hasDStroke {
+            // Double d -> đ
+            let oldText = buffer.text
+            buffer.applyDStroke(at: lastIdx)
+            let newText = buffer.text
+
+            // The second 'd' is consumed; we replace the first 'd' with 'đ'
+            return buildReplacement(oldText: oldText, newText: newText)
+        }
+
+        // If already has đ and typing another d -> undo (đd -> dd)
+        if buffer.hasDStroke, lastRawKey == "d" {
+            let oldText = buffer.text
+            buffer.removeDStroke()
+            let viChar = ViChar(base: "d", isUpperCase: isUpperCase)
+            buffer.append(viChar)
+            let newText = buffer.text
+            return buildReplacement(oldText: oldText, newText: newText)
+        }
+
+        // Regular d
+        let viChar = ViChar(base: "d", isUpperCase: isUpperCase)
+        buffer.append(viChar)
+        return .passThrough
+    }
+
+    // MARK: - Vowel Modifier Handling
+
+    /// Check if typing this character triggers a double-key modifier.
+    /// (a after a -> â, e after e -> ê, o after o -> ô)
+    private func isDoubleKeyTrigger(_ char: Character) -> Bool {
+        guard let last = lastRawKey else { return false }
+        return last == char && (char == "a" || char == "e" || char == "o")
+    }
+
+    /// Handle vowel modifier keys (aa->â, ee->ê, oo->ô, aw->ă, ow->ơ, uw->ư, w standalone).
+    /// Returns nil if no modification can be applied.
+    private func handleVowelModifier(_ key: Character, isUpperCase: Bool) -> EngineResult? {
+        // Try each modifier rule
+        for rule in VietnameseData.telexVowelModifiers {
+            if rule.trigger == key {
+                // Find the target vowel in the buffer
+                if let targetIdx = buffer.lastIndex(ofBase: rule.target) {
+                    let currentMod = buffer.chars[targetIdx].modifier
+
+                    // If already has this modifier -> undo (double press reversal)
+                    if currentMod == rule.modifier {
+                        return undoVowelModifier(key, targetIndex: targetIdx, isUpperCase: isUpperCase)
+                    }
+
+                    // If no modifier yet -> apply
+                    if currentMod == .none {
+                        let oldText = buffer.text
+                        buffer.applyModifier(rule.modifier, at: targetIdx)
+                        let newText = buffer.text
+                        return buildReplacement(oldText: oldText, newText: newText)
+                    }
+                }
+            }
+        }
+
+        // Standalone 'w' -> 'ư' when there's no target vowel to modify
+        if key == "w" && buffer.isEmpty {
+            let viChar = ViChar(base: "u", modifier: .horn, isUpperCase: isUpperCase)
+            buffer.append(viChar)
+            // Replace the 'w' keystroke with 'ư'
+            return .replace(backspaces: 0, text: String(viChar.unicode))
+        }
+
+        return nil
+    }
+
+    /// Undo a vowel modifier when the same trigger is pressed again.
+    /// e.g., "aa" -> "â", then "aaa" -> "aa"
+    private func undoVowelModifier(_ key: Character, targetIndex: Int, isUpperCase: Bool) -> EngineResult {
+        let oldText = buffer.text
+
+        // Remove the modifier
+        buffer.removeModifier(at: targetIndex)
+
+        // Add the key as a literal character
+        let viChar = ViChar(base: key, isUpperCase: isUpperCase)
+        buffer.append(viChar)
+
+        let newText = buffer.text
+        return buildReplacement(oldText: oldText, newText: newText)
+    }
+
+    // MARK: - Backspace Handling
+
+    private func handleBackspace() -> EngineResult {
+        buffer.removeLast()
+        return .passThrough
+    }
+
+    // MARK: - Grammar Re-check
+
+    /// After adding a consonant following vowels, the tone mark position
+    /// might need to shift. e.g., typing "toa" + "s" places tone on 'o',
+    /// but then typing "n" (making "toasn" -> "toán") requires moving tone to 'a'.
+    private func recheckTonePlacement() -> EngineResult? {
+        guard let currentToneIdx = buffer.toneIndex else { return nil }
+        guard let newPosition = TonePlacement.findTonePosition(in: buffer) else { return nil }
+
+        // If position hasn't changed, no action needed
+        if newPosition == currentToneIdx { return nil }
+
+        let oldText = buffer.text
+        buffer.moveTone(to: newPosition)
+        let newText = buffer.text
+
+        // Only emit replacement if the text actually changed
+        if oldText == newText { return nil }
+
+        return buildReplacement(oldText: oldText, newText: newText)
+    }
+
+    // MARK: - Replacement Building
+
+    /// Build an EngineResult.replace by comparing old and new buffer text.
+    /// Calculates the minimum number of backspaces needed.
+    private func buildReplacement(oldText: String, newText: String) -> EngineResult {
+        // Find the common prefix length
+        let commonPrefix = zip(oldText, newText).prefix(while: { $0 == $1 }).count
+
+        // Number of old characters to delete (after the common prefix)
+        let backspaces = oldText.count - commonPrefix
+
+        // New characters to send (after the common prefix)
+        let newSuffix = String(newText.dropFirst(commonPrefix))
+
+        if backspaces == 0 && newSuffix.isEmpty {
+            return .passThrough
+        }
+
+        return .replace(backspaces: backspaces, text: newSuffix)
+    }
+}
