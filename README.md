@@ -1,5 +1,7 @@
 # NovaKey
 
+[Tiếng Việt](README.vi.md)
+
 Vietnamese input method for macOS using the backspace technique.
 
 Fast, lightweight (228KB), compatible with browsers, terminals, and all macOS apps.

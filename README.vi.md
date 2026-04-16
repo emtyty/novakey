@@ -1,0 +1,161 @@
+# NovaKey
+
+Bộ gõ tiếng Việt cho macOS sử dụng kỹ thuật backspace.
+
+Nhanh, nhẹ (228KB), tương thích với trình duyệt, terminal và mọi ứng dụng macOS.
+
+## Tính năng
+
+- **Kiểu gõ Telex** hỗ trợ đầy đủ dấu thanh (s/f/r/x/j/z) và biến đổi nguyên âm (aa/ee/oo/aw/ow/uw/dd)
+- **Kỹ thuật backspace** -- sử dụng CGEvent tap thay vì IMKit, hoạt động được trên thanh địa chỉ trình duyệt, Terminal, VS Code, Spotlight và mọi nơi
+- **Đặt dấu thông minh** -- theo quy tắc chính tả tiếng Việt hiện đại (ví dụ: `hoang` + `f` đặt dấu trên `a`, không phải `o`)
+- **Ứng dụng thanh menu** -- chạy dưới dạng biểu tượng trên thanh trạng thái (V/E), không hiện trên Dock
+- **Sửa lỗi autocomplete trình duyệt** -- gửi ký tự ẩn trước khi xóa để tránh xung đột với thanh địa chỉ
+- **Tự phục hồi sau sleep/wake** -- tự động khởi động lại event tap sau khi máy ngủ
+- **Option+Z** để chuyển đổi giữa chế độ Việt/Anh
+
+## Yêu cầu hệ thống
+
+- macOS 14.0+ (Sonoma trở lên)
+- Apple Silicon (arm64)
+- Quyền **Input Monitoring** (Cài đặt hệ thống > Quyền riêng tư & Bảo mật > Input Monitoring)
+- Quyền **Accessibility** (Cài đặt hệ thống > Quyền riêng tư & Bảo mật > Accessibility)
+
+## Biên dịch
+
+```bash
+swift build -c release
+```
+
+### Đóng gói thành .app
+
+```bash
+mkdir -p build/NovaKey.app/Contents/{MacOS,Resources}
+cp .build/release/NovaKey build/NovaKey.app/Contents/MacOS/NovaKey
+cp Resources/Info.plist build/NovaKey.app/Contents/Info.plist
+cp Resources/NovaKey.entitlements build/NovaKey.app/Contents/Resources/
+codesign --force --deep --sign - build/NovaKey.app
+```
+
+### Chạy ứng dụng
+
+```bash
+open build/NovaKey.app
+```
+
+Lần chạy đầu tiên, macOS sẽ yêu cầu cấp quyền. Cấp cả hai:
+1. **Cài đặt hệ thống > Quyền riêng tư & Bảo mật > Input Monitoring** -- bật NovaKey
+2. **Cài đặt hệ thống > Quyền riêng tư & Bảo mật > Accessibility** -- bật NovaKey
+
+Thanh menu sẽ hiển thị **V** (chế độ tiếng Việt) hoặc **E** (chế độ tiếng Anh).
+
+## Cách sử dụng
+
+### Bảng gõ Telex
+
+| Bạn gõ | Kết quả | Quy tắc |
+|--------|---------|---------|
+| `as` | `á` | dấu sắc |
+| `af` | `à` | dấu huyền |
+| `ar` | `ả` | dấu hỏi |
+| `ax` | `ã` | dấu ngã |
+| `aj` | `ạ` | dấu nặng |
+| `az` | `a` | xóa dấu |
+| `aa` | `â` | mũ |
+| `ee` | `ê` | mũ |
+| `oo` | `ô` | mũ |
+| `aw` | `ă` | trăng |
+| `ow` | `ơ` | móc |
+| `uw` | `ư` | móc |
+| `dd` | `đ` | đ ngang |
+
+### Phím tắt
+
+| Phím tắt | Chức năng |
+|----------|-----------|
+| `Option+Z` | Chuyển đổi chế độ Việt/Anh |
+
+### Cài đặt
+
+Nhấn vào biểu tượng **V/E** trên thanh menu > **Settings** để cấu hình:
+- **Fix browser autocomplete** -- bật mặc định, giúp gõ tiếng Việt trên thanh địa chỉ Chrome/Safari
+- **Send keys step-by-step** -- tắt mặc định, bật nếu bạn thấy ký tự bị lỗi trên một số ứng dụng
+
+## Kiến trúc
+
+```
+Bàn phím → CGEventTap (chặn) → TelexEngine (xử lý) → KeySender (xóa + thay thế) → Ứng dụng
+```
+
+### Cấu trúc dự án
+
+```
+Sources/NovaKey/
+├── App/                    # Điểm khởi chạy, delegate, logging
+├── Engine/                 # Engine Telex thuần Swift (không phụ thuộc UI/hệ thống)
+│   ├── TelexEngine.swift   # Máy trạng thái chính
+│   ├── SyllableBuffer.swift# Theo dõi âm tiết hiện tại
+│   ├── TonePlacement.swift # Thuật toán đặt dấu thông minh
+│   ├── VietnameseData.swift# Bảng Unicode, ánh xạ Telex
+│   ├── SpellingChecker.swift# Kiểm tra âm tiết hợp lệ
+│   └── KeyCode.swift       # Mã phím ảo macOS
+├── EventTap/               # CGEvent tap + gửi phím tổng hợp
+│   ├── EventTapManager.swift   # Vòng đời tap, callback sự kiện
+│   ├── KeySender.swift         # Gửi backspace + ký tự Unicode
+│   └── EventSourceManager.swift# Phát hiện sự kiện do chính mình tạo
+├── UI/                     # Biểu tượng thanh menu + cài đặt SwiftUI
+├── Settings/               # Lưu trữ UserDefaults, phím tắt
+└── Permissions/            # Kiểm tra quyền Input Monitoring + Accessibility
+```
+
+### Cách hoạt động của kỹ thuật Backspace
+
+1. CGEvent tap chặn mọi phím gõ trên toàn hệ thống
+2. TelexEngine xử lý phím qua máy trạng thái
+3. Nếu có biến đổi Telex (ví dụ: gõ `s` sau `a` → `á`):
+   - Phím gốc bị **chặn lại** (callback trả về nil)
+   - KeySender gửi **N phím backspace** để xóa ký tự cũ
+   - KeySender gửi **ký tự tiếng Việt thay thế** qua `CGEventKeyboardSetUnicodeString`
+4. Phát hiện sự kiện do chính mình tạo (qua `CGEventSource.sourceStateID`) để tránh vòng lặp vô hạn
+
+### Tại sao không dùng IMKit?
+
+Input Method Kit của Apple sử dụng "cửa sổ soạn thảo" (marked text) để hiển thị ký tự đang gõ. Nhiều ứng dụng không hỗ trợ tốt:
+- Thanh địa chỉ trình duyệt bỏ qua marked text
+- Các terminal emulator xử lý không nhất quán
+- Ứng dụng Electron thường bị lỗi
+
+Kỹ thuật backspace bỏ qua tất cả vấn đề này bằng cách làm việc trực tiếp ở tầng phím gõ.
+
+## Kiểm thử
+
+```bash
+# Biên dịch và chạy test engine (không cần Xcode)
+swiftc -o /tmp/novakey_tests \
+  Sources/NovaKey/Engine/*.swift \
+  Tests/run_tests.swift \
+  -framework Carbon \
+  -parse-as-library && /tmp/novakey_tests
+```
+
+38 test bao gồm:
+- Tất cả dấu thanh (sắc, huyền, hỏi, ngã, nặng, xóa dấu)
+- Tất cả biến đổi nguyên âm (mũ, trăng, móc)
+- Đ ngang, chuỗi kết hợp
+- Quy tắc đặt dấu thông minh
+- Các thao tác trên bộ đệm âm tiết
+- Xử lý phím ngắt từ và phím bổ trợ
+
+## Gỡ lỗi
+
+Log được ghi vào `/tmp/novakey.log`:
+
+```bash
+tail -f /tmp/novakey.log
+```
+
+## Giấy phép
+
+Bản quyền thuộc về tác giả. Đây là bản triển khai gốc được viết từ đầu.
+Các quy tắc ngôn ngữ tiếng Việt (kiểu gõ Telex, quy tắc đặt dấu) là sự thật ngôn ngữ học và không thuộc bản quyền.
+Các API macOS (CGEvent, IOKit) là giao diện công khai của Apple.
