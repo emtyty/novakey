@@ -13,5 +13,6 @@ enum AppConstants {
         static let fixBrowserAutocomplete = "NovaKey.fixBrowserAutocomplete"
         static let sendKeyStepByStep = "NovaKey.sendKeyStepByStep"
         static let launchAtLogin = "NovaKey.launchAtLogin"
+        static let playSoundOnSwitch = "NovaKey.playSoundOnSwitch"
     }
 }

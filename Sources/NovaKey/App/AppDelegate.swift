@@ -43,8 +43,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 self?.statusBarController.updateIcon(isVietnamese: isVietnamese)
                 AppSettings.shared.isVietnameseMode = isVietnamese
+                NotificationCenter.default.post(
+                    name: .novaKeyModeChanged, object: nil,
+                    userInfo: ["isVietnamese": isVietnamese]
+                )
+                if AppSettings.shared.playSoundOnSwitch {
+                    NSSound(named: NSSound.Name("Tink"))?.play()
+                }
                 Log.info("Mode toggled to: \(isVietnamese ? "Vietnamese" : "English")")
             }
+        }
+
+        // Settings changed: re-apply to event tap.
+        NotificationCenter.default.addObserver(
+            forName: .novaKeySettingsChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.applySettings()
         }
 
         // Set up status bar
@@ -124,14 +138,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let settingsView = SettingsView()
+        let settingsView = SettingsView(onToggleMode: { [weak self] vietnamese in
+            guard let self else { return }
+            if self.engine.isVietnameseMode != vietnamese {
+                self.engine.isVietnameseMode = vietnamese
+                self.engine.resetSession()
+                AppSettings.shared.isVietnameseMode = vietnamese
+                self.statusBarController.updateIcon(isVietnamese: vietnamese)
+                NotificationCenter.default.post(
+                    name: .novaKeyModeChanged, object: nil,
+                    userInfo: ["isVietnamese": vietnamese]
+                )
+            }
+        })
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 400),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
+            styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "NovaKey Settings"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = NSColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1.0)
         window.contentView = NSHostingView(rootView: settingsView)
         window.center()
         window.isReleasedWhenClosed = false

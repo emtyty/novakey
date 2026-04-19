@@ -30,6 +30,12 @@ final class AppSettings {
         set { defaults.set(newValue, forKey: AppConstants.Defaults.sendKeyStepByStep) }
     }
 
+    /// Whether to play a subtle system sound when toggling V/E.
+    var playSoundOnSwitch: Bool {
+        get { defaults.bool(forKey: AppConstants.Defaults.playSoundOnSwitch) }
+        set { defaults.set(newValue, forKey: AppConstants.Defaults.playSoundOnSwitch) }
+    }
+
     /// Hotkey keycode for toggling Vietnamese/English.
     var toggleHotkeyKeyCode: UInt16 {
         get {
