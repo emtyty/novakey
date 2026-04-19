@@ -18,6 +18,11 @@ enum EngineResult: Equatable {
 
     /// The key is a word break -- reset the session and let it through.
     case wordBreak
+
+    /// Emit a replacement (backspace + raw text) THEN let the original key
+    /// event pass through. Used when the accumulated syllable is invalid
+    /// at word-break time and must be restored to the raw keystrokes.
+    case restore(backspaces: Int, text: String)
 }
 
 // MARK: - Telex Engine
@@ -37,6 +42,12 @@ final class TelexEngine {
 
     /// The last raw key that was typed (for double-press detection).
     private var lastRawKey: Character? = nil
+
+    /// Raw letter keystrokes typed in the current session, with original case.
+    /// Used to restore the original keys if the syllable fails spelling check
+    /// at word-break. Cleared on reset and on backspace (since backspace makes
+    /// exact restoration impossible).
+    private var rawKeystrokes: String = ""
 
     // MARK: - Main Entry Point
 
@@ -70,8 +81,12 @@ final class TelexEngine {
             return .passThrough
         }
 
-        // Word break keys reset the session
+        // Word break keys: check for invalid syllable and restore if needed
         if key.isWordBreak {
+            if let restore = restoreIfInvalid() {
+                resetSession()
+                return restore
+            }
             resetSession()
             return .wordBreak
         }
@@ -95,6 +110,10 @@ final class TelexEngine {
 
         let char = isShift ? Character(ascii.uppercased()) : ascii
 
+        // Record the raw keystroke (with original case) for potential
+        // restoration on word-break if the syllable is invalid.
+        rawKeystrokes.append(char)
+
         return processLetter(char, isUpperCase: isShift)
     }
 
@@ -102,6 +121,7 @@ final class TelexEngine {
     func resetSession() {
         buffer.reset()
         lastRawKey = nil
+        rawKeystrokes = ""
     }
 
     // MARK: - Letter Processing
@@ -137,8 +157,10 @@ final class TelexEngine {
         let viChar = ViChar(base: lower, isUpperCase: isUpperCase)
         buffer.append(viChar)
 
-        // After adding a consonant after vowels, re-check tone placement
-        if !VietnameseData.vowels.contains(lower) && buffer.vowelCount > 0 && buffer.currentTone != .none {
+        // After adding any letter, re-check tone placement. This matters
+        // for vowel appends too -- e.g. "hos" -> "hó", then typing "a"
+        // should produce "hoá" (tone moves to the second vowel), not "hóa".
+        if buffer.currentTone != .none {
             if let moved = recheckTonePlacement() {
                 lastRawKey = lower
                 return moved
@@ -252,6 +274,22 @@ final class TelexEngine {
     /// Handle vowel modifier keys (aa->â, ee->ê, oo->ô, aw->ă, ow->ơ, uw->ư, w standalone).
     /// Returns nil if no modification can be applied.
     private func handleVowelModifier(_ key: Character, isUpperCase: Bool) -> EngineResult? {
+        // "ww" -> literal "w": the first 'w' on an empty buffer becomes 'ư'
+        // (standalone rule); pressing 'w' again in that state should revert
+        // to literal 'w', not 'uw'. Guarded by rawKeystrokes == "ww" to
+        // distinguish the standalone path from the 'u' + 'w' + 'w' path.
+        if key == "w"
+            && buffer.count == 1
+            && buffer.chars[0].base == "u"
+            && buffer.chars[0].modifier == .horn
+            && rawKeystrokes.lowercased() == "ww" {
+            let oldText = buffer.text
+            buffer.reset()
+            buffer.append(ViChar(base: "w", isUpperCase: isUpperCase))
+            let newText = buffer.text
+            return buildReplacement(oldText: oldText, newText: newText)
+        }
+
         // Try each modifier rule
         for rule in VietnameseData.telexVowelModifiers {
             if rule.trigger == key {
@@ -268,6 +306,19 @@ final class TelexEngine {
                     if currentMod == .none {
                         let oldText = buffer.text
                         buffer.applyModifier(rule.modifier, at: targetIdx)
+                        // "uo" + w -> "ươ": when horn is applied to an 'o'
+                        // immediately preceded by an unmodified 'u', propagate
+                        // horn to the 'u' as well. Exception: "qu" + 'o' + w
+                        // should only horn the 'o' (giving quơ, not qươ) since
+                        // the 'u' there is part of the consonant cluster.
+                        if rule.modifier == .horn && rule.target == "o" && targetIdx > 0 {
+                            let prev = buffer.chars[targetIdx - 1]
+                            let precededByQ = targetIdx >= 2
+                                && buffer.chars[targetIdx - 2].base == "q"
+                            if prev.base == "u" && prev.modifier == .none && !precededByQ {
+                                buffer.applyModifier(.horn, at: targetIdx - 1)
+                            }
+                        }
                         let newText = buffer.text
                         return buildReplacement(oldText: oldText, newText: newText)
                     }
@@ -306,6 +357,10 @@ final class TelexEngine {
 
     private func handleBackspace() -> EngineResult {
         buffer.removeLast()
+        // Once the user corrects mid-word, we cannot reliably reconstruct
+        // the original raw keystrokes, so we disable the restore path for
+        // the remainder of this session.
+        rawKeystrokes = ""
         return .passThrough
     }
 
@@ -329,6 +384,34 @@ final class TelexEngine {
         if oldText == newText { return nil }
 
         return buildReplacement(oldText: oldText, newText: newText)
+    }
+
+    // MARK: - Spelling Restore
+
+    /// If the current buffer carries Telex transformations (tone, modifier,
+    /// or d-stroke) but does not form a structurally valid Vietnamese syllable,
+    /// return a restore result that replaces the composed text with the raw
+    /// keystrokes the user originally typed. Returns nil when no restore is
+    /// needed.
+    private func restoreIfInvalid() -> EngineResult? {
+        guard !buffer.isEmpty else { return nil }
+        guard !rawKeystrokes.isEmpty else { return nil }
+
+        // Only restore when the buffer actually contains a Telex transformation;
+        // otherwise the user just typed plain letters that we should leave alone.
+        let hasTransformation = buffer.chars.contains {
+            $0.modifier != .none || $0.tone != .none || $0.hasDStroke
+        }
+        guard hasTransformation else { return nil }
+
+        // Don't restore if the syllable is structurally valid.
+        if SpellingChecker.isValidSyllable(buffer) { return nil }
+
+        // Avoid a no-op replacement if nothing would change on screen.
+        let composed = buffer.text
+        if composed == rawKeystrokes { return nil }
+
+        return .restore(backspaces: composed.count, text: rawKeystrokes)
     }
 
     // MARK: - Replacement Building

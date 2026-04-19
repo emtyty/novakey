@@ -102,6 +102,22 @@ func makeBuffer(_ text: String) -> SyllableBuffer {
     return buffer
 }
 
+/// Type a sequence of letters, then press space, and return the engine
+/// result for the space key and the composed text right before the break.
+func typeThenSpace(_ chars: String) -> (space: EngineResult, composed: String) {
+    let engine = TelexEngine()
+    engine.isVietnameseMode = true
+    for char in chars {
+        let lower = char.lowercased().first!
+        let isShift = char.isUppercase
+        let keyCode = keyCodeFor(lower)
+        _ = engine.processKey(keyCode: keyCode, isShift: isShift)
+    }
+    let composed = engine.buffer.text
+    let result = engine.processKey(keyCode: KeyCode.space.rawValue)
+    return (result, composed)
+}
+
 // ============================================================
 // Main entry point
 // ============================================================
@@ -332,6 +348,16 @@ test("horn: uw -> ư") {
     try expect(typeAndGetText("uw"), "\u{01B0}")
 }
 
+test("ww -> w (standalone reversal)") {
+    // First 'w' on empty buffer -> 'ư'. Second 'w' should revert to literal 'w'.
+    try expect(typeAndGetText("ww"), "w")
+}
+
+test("uww -> uw (undo via double w after uw)") {
+    // After 'u' + 'w' -> 'ư', pressing 'w' again removes horn and appends 'w'.
+    try expect(typeAndGetText("uww"), "uw")
+}
+
 test("d-stroke: dd -> đ") {
     try expect(typeAndGetText("dd"), "\u{0111}")
 }
@@ -363,6 +389,113 @@ test("modifier key: Cmd resets buffer") {
     _ = engine.processKey(keyCode: KeyCode.a.rawValue)
     let result = engine.processKey(keyCode: KeyCode.c.rawValue, hasCommandOrControl: true)
     try expect(result, EngineResult.passThrough)
+    try expectTrue(engine.buffer.isEmpty)
+}
+
+// ============================================================
+// Tone re-check on late vowel append (feature #3)
+// ============================================================
+print("\n--- Tone Re-check on Vowel Append ---")
+
+test("hosa -> hoá (tone moves to 2nd vowel when vowel is appended)") {
+    try expect(typeAndGetText("hosa"), "ho\u{00E1}") // hoá
+}
+
+test("tosa -> toá") {
+    try expect(typeAndGetText("tosa"), "to\u{00E1}") // toá
+}
+
+test("hofa -> hoà (huyen moves to 2nd vowel on vowel append)") {
+    try expect(typeAndGetText("hofa"), "ho\u{00E0}") // hoà
+}
+
+// ============================================================
+// Horn propagation for "uo" + w (feature #3)
+// ============================================================
+print("\n--- Horn Propagation for uo ---")
+
+test("uow -> ươ (horn propagates to u)") {
+    try expect(typeAndGetText("uow"), "\u{01B0}\u{01A1}") // ươ
+}
+
+test("thuowng -> thương") {
+    try expect(typeAndGetText("thuowng"), "th\u{01B0}\u{01A1}ng") // thương
+}
+
+test("nuowcs -> nướcs? -> nước") {
+    // n-u-o-w-c-s: uo+w->ươ, then c appended (ươc), then s tones ư -> ướ
+    try expect(typeAndGetText("nuowcs"), "n\u{01B0}\u{1EDB}c") // nước
+}
+
+test("quow -> quơ (qu exception: no horn on u)") {
+    // After "qu" the u is part of the consonant cluster, so horn should only
+    // apply to the following o.
+    try expect(typeAndGetText("quow"), "qu\u{01A1}") // quơ
+}
+
+// ============================================================
+// Spelling check + restore on word-break (feature #2)
+// ============================================================
+print("\n--- Restore on Invalid Word-Break ---")
+
+test("valid syllable 'as' + space -> no restore") {
+    let (result, composed) = typeThenSpace("as")
+    try expect(composed, "\u{00E1}") // á
+    try expect(result, EngineResult.wordBreak)
+}
+
+test("valid 'viet' + space -> no restore (plain letters)") {
+    let (result, _) = typeThenSpace("viet")
+    try expect(result, EngineResult.wordBreak)
+}
+
+test("invalid 'wd' + space -> restore to raw 'wd'") {
+    // 'w' alone -> ư. Then 'd' makes "ưd". 'd' is not a valid ending.
+    // Buffer has horn transformation -> restore to raw "wd".
+    let (result, composed) = typeThenSpace("wd")
+    try expect(composed, "\u{01B0}d") // ưd
+    try expect(result, EngineResult.restore(backspaces: 2, text: "wd"))
+}
+
+test("invalid 'aal' + space -> restore to 'aal'") {
+    // "aa" -> â, then 'l' appended. "âl" has no valid ending (l).
+    // Circumflex transformation present -> restore.
+    let (result, composed) = typeThenSpace("aal")
+    try expect(composed, "\u{00E2}l") // âl
+    try expect(result, EngineResult.restore(backspaces: 2, text: "aal"))
+}
+
+test("plain English 'hello' + space -> no restore") {
+    let (result, _) = typeThenSpace("hello")
+    try expect(result, EngineResult.wordBreak)
+}
+
+test("case preserved on restore: 'AAL' -> 'AAL'") {
+    let (result, _) = typeThenSpace("AAL")
+    try expect(result, EngineResult.restore(backspaces: 2, text: "AAL"))
+}
+
+test("backspace disables restore for the rest of the word") {
+    let engine = TelexEngine()
+    engine.isVietnameseMode = true
+    // Type "aa" (-> â), then backspace once (clears raw tracking),
+    // then type "l" and space. No restore should fire now.
+    for ch in "aa" {
+        _ = engine.processKey(keyCode: keyCodeFor(ch), isShift: false)
+    }
+    _ = engine.processKey(keyCode: KeyCode.delete.rawValue)
+    _ = engine.processKey(keyCode: keyCodeFor("l"), isShift: false)
+    let result = engine.processKey(keyCode: KeyCode.space.rawValue)
+    try expect(result, EngineResult.wordBreak)
+}
+
+test("word break resets buffer even after restore") {
+    let engine = TelexEngine()
+    engine.isVietnameseMode = true
+    for ch in "wd" {
+        _ = engine.processKey(keyCode: keyCodeFor(ch), isShift: false)
+    }
+    _ = engine.processKey(keyCode: KeyCode.space.rawValue)
     try expectTrue(engine.buffer.isEmpty)
 }
 

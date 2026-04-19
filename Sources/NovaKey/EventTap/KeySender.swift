@@ -30,6 +30,11 @@ final class KeySender {
         case .passThrough, .wordBreak:
             break
 
+        case .restore(let backspaces, let text):
+            // Restore behaves identically to .replace at the keystroke level;
+            // the caller is responsible for letting the original event pass.
+            execute(result: .replace(backspaces: backspaces, text: text), proxy: proxy)
+
         case .replace(let backspaces, let text):
             // Browser fix: send an invisible character first to break autocomplete
             if fixBrowserAutocomplete && backspaces > 0 {

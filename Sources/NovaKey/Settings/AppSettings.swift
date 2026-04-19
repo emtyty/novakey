@@ -55,7 +55,7 @@ final class AppSettings {
         defaults.register(defaults: [
             AppConstants.Defaults.isVietnameseMode: true,
             AppConstants.Defaults.fixBrowserAutocomplete: true,
-            AppConstants.Defaults.sendKeyStepByStep: false,
+            AppConstants.Defaults.sendKeyStepByStep: true,
         ])
     }
 }

@@ -204,6 +204,13 @@ final class EventTapManager {
             Log.info("REPLACE: \(bs) backspaces + '\(text)'")
             keySender.execute(result: result, proxy: proxy)
             return nil
+
+        case .restore(let bs, let text):
+            // Invalid syllable at word-break: emit the raw-keystroke restore
+            // synthetically, then let the original word-break key pass through.
+            Log.info("RESTORE: \(bs) backspaces + '\(text)'")
+            keySender.execute(result: .replace(backspaces: bs, text: text), proxy: proxy)
+            return passThrough
         }
     }
 
