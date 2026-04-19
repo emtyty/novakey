@@ -49,6 +49,14 @@ final class TelexEngine {
     /// exact restoration impossible).
     private var rawKeystrokes: String = ""
 
+    /// The syllable state at the moment of the most recent word-break.
+    /// If the user immediately presses backspace (to delete the word-break
+    /// character), we re-enter this state so further Telex keys continue to
+    /// operate on the previous word. Cleared as soon as any non-backspace key
+    /// follows the word-break.
+    private var savedBuffer: SyllableBuffer? = nil
+    private var savedRawKeystrokes: String = ""
+
     // MARK: - Main Entry Point
 
     /// Process a single keystroke.
@@ -84,17 +92,42 @@ final class TelexEngine {
         // Word break keys: check for invalid syllable and restore if needed
         if key.isWordBreak {
             if let restore = restoreIfInvalid() {
+                // After an invalid-syllable restore, the visible text is the
+                // raw keys -- not the composed buffer -- so we cannot reliably
+                // resume editing on backspace.
+                savedBuffer = nil
                 resetSession()
                 return restore
+            }
+            // Save the completed syllable so the user can re-enter it by
+            // pressing backspace to delete the word-break character.
+            if !buffer.isEmpty {
+                savedBuffer = buffer
+                savedRawKeystrokes = rawKeystrokes
+            } else {
+                savedBuffer = nil
             }
             resetSession()
             return .wordBreak
         }
 
-        // Backspace: remove last character from buffer
+        // Backspace: if we just word-broke with a non-empty syllable, the
+        // user is stepping back into that word -- rehydrate the buffer so
+        // subsequent Telex keys act on it.
         if key == .delete {
+            if buffer.isEmpty, let saved = savedBuffer {
+                buffer = saved
+                rawKeystrokes = savedRawKeystrokes
+                lastRawKey = savedRawKeystrokes.last?.lowercased().first
+                savedBuffer = nil
+                return .passThrough
+            }
             return handleBackspace()
         }
+
+        // Any other key following a word-break means the user is starting a
+        // new word, so discard the saved state.
+        savedBuffer = nil
 
         // Vietnamese mode off: just track nothing
         if !isVietnameseMode {
@@ -153,18 +186,25 @@ final class TelexEngine {
             }
         }
 
-        // Regular letter -- add to buffer
+        // Regular letter -- add to buffer. Capture the app's current display
+        // (= buffer text BEFORE this append) so any re-check that follows can
+        // compute a correct backspace-and-replace diff. The app hasn't seen
+        // the new letter yet, so `buffer.text` post-append is NOT a valid
+        // oldText.
+        let preAppendText = buffer.text
         let viChar = ViChar(base: lower, isUpperCase: isUpperCase)
         buffer.append(viChar)
 
         // After adding any letter, re-check tone placement. This matters
         // for vowel appends too -- e.g. "hos" -> "hó", then typing "a"
         // should produce "hoá" (tone moves to the second vowel), not "hóa".
-        if buffer.currentTone != .none {
-            if let moved = recheckTonePlacement() {
-                lastRawKey = lower
-                return moved
-            }
+        if buffer.currentTone != .none,
+           let currentToneIdx = buffer.toneIndex,
+           let newPosition = TonePlacement.findTonePosition(in: buffer),
+           newPosition != currentToneIdx {
+            buffer.moveTone(to: newPosition)
+            lastRawKey = lower
+            return buildReplacement(oldText: preAppendText, newText: buffer.text)
         }
 
         lastRawKey = lower
@@ -235,11 +275,14 @@ final class TelexEngine {
     /// Handle the 'd' key. If the last character in the buffer is also 'd',
     /// convert to đ. Otherwise, add as regular 'd'.
     private func handleDKey(isUpperCase: Bool) -> EngineResult {
-        // Check if previous character is 'd' without stroke
-        if let lastIdx = buffer.lastIndex(ofBase: "d"), !buffer.hasDStroke {
+        // Only trigger dd -> đ when the 'd' is immediately adjacent (the last
+        // char in the buffer). Matching any earlier 'd' in the syllable would
+        // wrongly convert cases like "disabled" where the leading 'd' is
+        // several chars behind the current one.
+        if let last = buffer.chars.last, last.base == "d", !last.hasDStroke {
             // Double d -> đ
             let oldText = buffer.text
-            buffer.applyDStroke(at: lastIdx)
+            buffer.applyDStroke(at: buffer.count - 1)
             let newText = buffer.text
 
             // The second 'd' is consumed; we replace the first 'd' with 'đ'
@@ -362,28 +405,6 @@ final class TelexEngine {
         // the remainder of this session.
         rawKeystrokes = ""
         return .passThrough
-    }
-
-    // MARK: - Grammar Re-check
-
-    /// After adding a consonant following vowels, the tone mark position
-    /// might need to shift. e.g., typing "toa" + "s" places tone on 'o',
-    /// but then typing "n" (making "toasn" -> "toán") requires moving tone to 'a'.
-    private func recheckTonePlacement() -> EngineResult? {
-        guard let currentToneIdx = buffer.toneIndex else { return nil }
-        guard let newPosition = TonePlacement.findTonePosition(in: buffer) else { return nil }
-
-        // If position hasn't changed, no action needed
-        if newPosition == currentToneIdx { return nil }
-
-        let oldText = buffer.text
-        buffer.moveTone(to: newPosition)
-        let newText = buffer.text
-
-        // Only emit replacement if the text actually changed
-        if oldText == newText { return nil }
-
-        return buildReplacement(oldText: oldText, newText: newText)
     }
 
     // MARK: - Spelling Restore

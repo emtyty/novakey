@@ -410,6 +410,57 @@ test("hofa -> hoà (huyen moves to 2nd vowel on vowel append)") {
 }
 
 // ============================================================
+// Replacement diff correctness (regression: "disabled" bug)
+// ============================================================
+print("\n--- Replacement Diff ---")
+
+/// Simulates what the user sees in the app by applying each EngineResult
+/// to a running string buffer. Returns the final visible text.
+func simulateApp(_ chars: String) -> String {
+    let engine = TelexEngine()
+    engine.isVietnameseMode = true
+    var visible = ""
+    for ch in chars {
+        let lower = ch.lowercased().first!
+        let isShift = ch.isUppercase
+        let result = engine.processKey(keyCode: keyCodeFor(lower), isShift: isShift)
+        switch result {
+        case .passThrough, .wordBreak:
+            visible.append(isShift ? Character(String(lower).uppercased()) : lower)
+        case .replace(let bs, let text):
+            if bs > 0 { visible.removeLast(min(bs, visible.count)) }
+            visible.append(contentsOf: text)
+        case .restore(let bs, let text):
+            if bs > 0 { visible.removeLast(min(bs, visible.count)) }
+            visible.append(contentsOf: text)
+        }
+    }
+    return visible
+}
+
+test("app-visible: 'hosa' -> 'hoá' (recheck diff correct)") {
+    try expect(simulateApp("hosa"), "ho\u{00E1}") // hoá, not "oá"
+}
+
+test("app-visible: 'disab' -> 'diáb' (tone shift via consonant)") {
+    try expect(simulateApp("disab"), "di\u{00E1}b") // diáb, 'd' preserved
+}
+
+test("app-visible: 'disabled' -> 'diábled' (no false dd->đ)") {
+    // Typing English "disabled" in Vietnamese mode should not match the
+    // leading 'd' for dd->đ when the trailing 'd' arrives.
+    try expect(simulateApp("disabled"), "di\u{00E1}bled") // diábled
+}
+
+test("dd still converts to đ when adjacent") {
+    try expect(simulateApp("dd"), "\u{0111}") // đ
+}
+
+test("dad stays literal ('d' not adjacent)") {
+    try expect(simulateApp("dad"), "dad")
+}
+
+// ============================================================
 // Horn propagation for "uo" + w (feature #3)
 // ============================================================
 print("\n--- Horn Propagation for uo ---")
@@ -496,6 +547,78 @@ test("word break resets buffer even after restore") {
         _ = engine.processKey(keyCode: keyCodeFor(ch), isShift: false)
     }
     _ = engine.processKey(keyCode: KeyCode.space.rawValue)
+    try expectTrue(engine.buffer.isEmpty)
+}
+
+// ============================================================
+// Resume syllable on backspace after word-break
+// ============================================================
+print("\n--- Resume-on-Backspace ---")
+
+test("cái + space + backspace + j -> cại") {
+    let engine = TelexEngine()
+    engine.isVietnameseMode = true
+    for ch in "cais" {
+        _ = engine.processKey(keyCode: keyCodeFor(ch), isShift: false)
+    }
+    try expect(engine.buffer.text, "c\u{00E1}i") // cái (sanity)
+    let spaceResult = engine.processKey(keyCode: KeyCode.space.rawValue)
+    try expect(spaceResult, EngineResult.wordBreak)
+    try expectTrue(engine.buffer.isEmpty)
+    // Backspace: restores saved syllable, passes through so OS deletes space
+    let bsResult = engine.processKey(keyCode: KeyCode.delete.rawValue)
+    try expect(bsResult, EngineResult.passThrough)
+    try expect(engine.buffer.text, "c\u{00E1}i") // cái restored
+    // Now type j -> should replace sắc with nặng
+    _ = engine.processKey(keyCode: keyCodeFor("j"), isShift: false)
+    try expect(engine.buffer.text, "c\u{1EA1}i") // cại
+}
+
+test("letter after word-break discards saved state") {
+    let engine = TelexEngine()
+    engine.isVietnameseMode = true
+    for ch in "cais" {
+        _ = engine.processKey(keyCode: keyCodeFor(ch), isShift: false)
+    }
+    _ = engine.processKey(keyCode: KeyCode.space.rawValue)
+    // Type a new letter -- user is starting a new word.
+    _ = engine.processKey(keyCode: keyCodeFor("h"), isShift: false)
+    try expect(engine.buffer.text, "h")
+    // Backspace now just removes 'h'; no resume should fire.
+    let bsResult = engine.processKey(keyCode: KeyCode.delete.rawValue)
+    try expect(bsResult, EngineResult.passThrough)
+    try expectTrue(engine.buffer.isEmpty)
+}
+
+test("double word-break clears saved state") {
+    let engine = TelexEngine()
+    engine.isVietnameseMode = true
+    for ch in "cais" {
+        _ = engine.processKey(keyCode: keyCodeFor(ch), isShift: false)
+    }
+    _ = engine.processKey(keyCode: KeyCode.space.rawValue) // saves cái
+    _ = engine.processKey(keyCode: KeyCode.space.rawValue) // empty buffer clears saved
+    let bsResult = engine.processKey(keyCode: KeyCode.delete.rawValue)
+    try expect(bsResult, EngineResult.passThrough)
+    try expectTrue(engine.buffer.isEmpty) // no restore
+}
+
+test("invalid syllable restore does not leave resumable state") {
+    // "wd" + space -> restore to raw "wd". Backspace afterwards should NOT
+    // re-hydrate a composed buffer, because visible text is raw keystrokes.
+    let engine = TelexEngine()
+    engine.isVietnameseMode = true
+    for ch in "wd" {
+        _ = engine.processKey(keyCode: keyCodeFor(ch), isShift: false)
+    }
+    let spaceResult = engine.processKey(keyCode: KeyCode.space.rawValue)
+    if case .restore = spaceResult {
+        // expected
+    } else {
+        throw AssertionError(description: "Expected .restore, got \(spaceResult)")
+    }
+    let bsResult = engine.processKey(keyCode: KeyCode.delete.rawValue)
+    try expect(bsResult, EngineResult.passThrough)
     try expectTrue(engine.buffer.isEmpty)
 }
 

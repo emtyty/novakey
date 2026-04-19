@@ -60,6 +60,14 @@ final class KeySender {
 
     // MARK: - Backspace Sending
 
+    /// Apply the kCGEventFlagMaskNonCoalesced flag so macOS doesn't coalesce
+    /// rapidly-fired synthetic events. Without this, fast typing can cause the
+    /// OS to merge or drop our backspaces / character events, producing
+    /// duplicated or missing letters.
+    private func markNonCoalesced(_ event: CGEvent) {
+        event.flags = event.flags.union(.maskNonCoalesced)
+    }
+
     /// Send N backspace key events.
     /// Keycode 0x33 (51) = Backspace/Delete on macOS.
     private func sendBackspaces(count: Int, proxy: CGEventTapProxy) {
@@ -72,6 +80,8 @@ final class KeySender {
                                       virtualKey: backspaceKeyCode, keyDown: false) else {
                 continue
             }
+            markNonCoalesced(keyDown)
+            markNonCoalesced(keyUp)
             keyDown.tapPostEvent(proxy)
             keyUp.tapPostEvent(proxy)
         }
@@ -101,6 +111,8 @@ final class KeySender {
             keyDown.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: &chunk)
             keyUp.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: &chunk)
 
+            markNonCoalesced(keyDown)
+            markNonCoalesced(keyUp)
             keyDown.tapPostEvent(proxy)
             keyUp.tapPostEvent(proxy)
         }
@@ -124,6 +136,8 @@ final class KeySender {
             keyDown.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
             keyUp.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
 
+            markNonCoalesced(keyDown)
+            markNonCoalesced(keyUp)
             keyDown.tapPostEvent(proxy)
             keyUp.tapPostEvent(proxy)
         }
@@ -146,6 +160,8 @@ final class KeySender {
         keyDown.keyboardSetUnicodeString(stringLength: 1, unicodeString: &utf16)
         keyUp.keyboardSetUnicodeString(stringLength: 1, unicodeString: &utf16)
 
+        markNonCoalesced(keyDown)
+        markNonCoalesced(keyUp)
         keyDown.tapPostEvent(proxy)
         keyUp.tapPostEvent(proxy)
     }
