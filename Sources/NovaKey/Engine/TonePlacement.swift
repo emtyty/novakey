@@ -106,9 +106,13 @@ enum TonePlacement {
         let count = indices.count
         let lower = vowels.lowercased()
 
-        // Three-vowel clusters: tone on the middle vowel
-        // e.g., "oai" -> tone on 'a', "uye" -> tone on 'y', "uoi" -> tone on 'o'
+        // Three-vowel clusters: tone on the modified vowel if present, else middle.
+        // e.g., "oai" -> 'a' (middle, no modifiers), "uoi" -> 'o' (middle),
+        //        "uye" -> 'ê' (has circumflex, NOT middle 'y')
         if count >= 3 {
+            if let modIdx = indices.last(where: { buffer.chars[$0].modifier != .none }) {
+                return modIdx
+            }
             return indices[1]
         }
 

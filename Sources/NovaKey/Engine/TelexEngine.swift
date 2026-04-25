@@ -333,6 +333,23 @@ final class TelexEngine {
             return buildReplacement(oldText: oldText, newText: newText)
         }
 
+        // Special case: "ua" + w -> "ưa" (horn on u, a stays plain).
+        // Without this, the "aw -> ă" rule fires first and gives "uă" instead.
+        // Same guard as the "uo" propagation: skip if u is part of "qu" cluster.
+        if key == "w",
+           let aIdx = buffer.lastIndex(ofBase: "a"),
+           aIdx > 0,
+           buffer.chars[aIdx].modifier == .none {
+            let prev = buffer.chars[aIdx - 1]
+            let precededByQ = aIdx >= 2 && buffer.chars[aIdx - 2].base == "q"
+            if prev.base == "u" && prev.modifier == .none && !precededByQ {
+                let oldText = buffer.text
+                buffer.applyModifier(.horn, at: aIdx - 1)
+                let newText = buffer.text
+                return buildReplacement(oldText: oldText, newText: newText)
+            }
+        }
+
         // Try each modifier rule
         for rule in VietnameseData.telexVowelModifiers {
             if rule.trigger == key {
