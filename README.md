@@ -32,12 +32,10 @@ swift build -c release
 ### Package as .app bundle
 
 ```bash
-mkdir -p build/NovaKey.app/Contents/{MacOS,Resources}
-cp .build/release/NovaKey build/NovaKey.app/Contents/MacOS/NovaKey
-cp Resources/Info.plist build/NovaKey.app/Contents/Info.plist
-cp Resources/NovaKey.entitlements build/NovaKey.app/Contents/Resources/
-codesign --force --deep --sign - build/NovaKey.app
+./build.sh
 ```
+
+This assembles the app bundle, copies all resources, and signs it ad-hoc.
 
 ### Run
 
@@ -158,6 +156,4 @@ tail -f /tmp/novakey.log
 
 ## License
 
-All rights reserved. This is an original implementation written from scratch.
-Vietnamese language rules (Telex input, tone placement) are linguistic facts and are not copyrightable.
-macOS APIs (CGEvent, IOKit) are Apple's public interfaces.
+MIT — see [LICENSE](LICENSE).

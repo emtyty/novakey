@@ -30,12 +30,10 @@ swift build -c release
 ### Đóng gói thành .app
 
 ```bash
-mkdir -p build/NovaKey.app/Contents/{MacOS,Resources}
-cp .build/release/NovaKey build/NovaKey.app/Contents/MacOS/NovaKey
-cp Resources/Info.plist build/NovaKey.app/Contents/Info.plist
-cp Resources/NovaKey.entitlements build/NovaKey.app/Contents/Resources/
-codesign --force --deep --sign - build/NovaKey.app
+./build.sh
 ```
+
+Script này tự động tạo bundle, sao chép tài nguyên và ký ad-hoc.
 
 ### Chạy ứng dụng
 
@@ -156,6 +154,4 @@ tail -f /tmp/novakey.log
 
 ## Giấy phép
 
-Bản quyền thuộc về tác giả. Đây là bản triển khai gốc được viết từ đầu.
-Các quy tắc ngôn ngữ tiếng Việt (kiểu gõ Telex, quy tắc đặt dấu) là sự thật ngôn ngữ học và không thuộc bản quyền.
-Các API macOS (CGEvent, IOKit) là giao diện công khai của Apple.
+MIT — xem [LICENSE](LICENSE).
