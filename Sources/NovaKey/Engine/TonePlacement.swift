@@ -145,14 +145,6 @@ enum TonePlacement {
 
         // Without ending consonant: apply specific pair rules
 
-        // "uy" cluster (no ending): modern Vietnamese places the tone on 'y',
-        // e.g. "thuý", "huỷ", "luỹ". Both letters are in the falling-ender set
-        // below, so without this special case the default would (wrongly) put
-        // the tone on 'u'.
-        if first == "u" && second == "y" {
-            return indices[1]
-        }
-
         // Diphthongs ending in 'i', 'u', 'y' (falling diphthongs):
         // ai, oi, ui, ao, au, eu, iu, ay, uy -> tone on FIRST vowel
         // e.g., "hai" -> "hái", "cao" -> "cáo", "đau" -> "đáu"
