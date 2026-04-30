@@ -14,11 +14,29 @@ enum SpellingChecker {
         guard !buffer.isEmpty else { return false }
 
         let initial = buffer.initialConsonant.lowercased()
-        let vowelCluster = buffer.vowelCluster.lowercased()
+        var vowelCluster = buffer.vowelCluster.lowercased()
         let ending = buffer.endingConsonant.lowercased()
 
         // Must have at least one vowel
         guard !vowelCluster.isEmpty else { return false }
+
+        // "gi" + vowel: the leading 'i' is part of the consonant digraph, not
+        // the nucleus (e.g. "giữa" -> nucleus "ưa"/"ua", not "iua"). When the
+        // buffer starts with 'g' followed by an 'i' that has more vowels after
+        // it, the firstVowelIndex sits on the 'i' and the initial reads as "g".
+        if (initial == "g" || initial == "gi"),
+           vowelCluster.count > 1,
+           vowelCluster.first == "i" {
+            vowelCluster.removeFirst()
+        }
+
+        // "qu" + vowel: the 'u' in 'qu' is part of the consonant cluster,
+        // mirroring the same exception used during tone placement.
+        if initial.hasSuffix("q"),
+           vowelCluster.count > 1,
+           vowelCluster.first == "u" {
+            vowelCluster.removeFirst()
+        }
 
         // Validate initial consonant (if present)
         if !initial.isEmpty && !isValidInitialConsonant(initial) {
@@ -104,6 +122,7 @@ enum SpellingChecker {
         // Three-vowel combinations
         "ieu", "oai", "oay", "oeo", "uai", "uay",
         "uoi", "uou", "uya", "uye", "uyu",
+        "yeu",
     ]
 
     private static func isValidVowelNucleus(_ v: String) -> Bool {
